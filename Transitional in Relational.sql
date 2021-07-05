@@ -863,21 +863,6 @@ select * from [Information_in_Effect]('2018-12-01 14:00', '2018-12-13 15:45');
 select * from [Information_in_Effect]('2018-12-01 14:00', '2018-12-13 15:50');
 
 
-------------------------------------------------------------------------------------------------
-
-select * from [Thing];
-select * from [Role];
-select * from [Appearance];
-select * from [AppearanceSet];
-select * from [Appearance_in_AppearanceSet];
-select * from [Posit];
-select * from [v_Posit];
-select * from [v_Assertion];
-
------------------------------------------ TODO BELOW -------------------------------------------
-
-
-
 --------------------------------------- METADATA ---------------------------------------
 -- The good thing about posits, assertions, and so on being "things" in themselves
 -- is that it makes it possible to produce posits about them as well. This is 
@@ -886,355 +871,112 @@ select * from [v_Assertion];
 -- let the Script positor assert when what we have done so far was recorded in 
 -- our database right now.
 
--- we now have 21 things
-select * from [Thing];
-
--- create another role thing 
-drop table if exists #Role2;
-create table #Role2([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Role2 values (DEFAULT);
-
--- create a new role
-insert into [Role]([RoleUID], [Role]) 
-select [UID], 'was recorded at' 
-from #Role2;
-
--- check what the role looks like
+-- first add a new role
+exec AddRole 'was recorded at';
+-- totalling five roles so far
 select * from [Role];
 
--- create an appearance thing for every thing we have created
-drop table if exists #Appearance2;
-create table #Appearance2([UID] uniqueidentifier not null primary key); 
-merge [Thing] t 
-using [Thing] src on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #Appearance2;
+-- add a whole bunch of posits
+declare @AddPositsSQL varchar(max) = (
+	select 'exec AddPosit ''' + cast(Max_Posit_Identity + Ordinal as varchar(10)) + ' ' +
+		'[{(' + cast([Posit_Identity] as varchar(10)) + ', posit), (45, was recorded at)}, "' + 
+		cast(getdate() as varchar(555)) + '", 2021-07-05];'''
+	from (
+		select 
+			[Posit_Identity], 
+			ROW_NUMBER() over (order by [Posit_Identity]) as Ordinal, 
+			max([Posit_Identity]) over (partition by null) as Max_Posit_Identity
+		from [Posit]
+	) p
+	for xml path(''), type
+).value('.', 'varchar(max)');
+exec (@AddPositsSQL);
 
--- create an equal number of appearances 
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], t.[UID], r.[RoleUID] 
-from (select [UID], row_number() over (order by [UID]) as _row from #Appearance2) app
-join (select [UID], row_number() over (order by [UID]) as _row from [Thing]) t 
-on t._row = app._row
-cross apply (select [RoleUID] from [Role] where [Role] = 'was recorded at') r;
-
--- we now have 23 appearances
-select * from [Appearance];
-
--- create 22 dereferencing set things
-drop table if exists #DereferencingSet2;
-create table #DereferencingSet2([UID] uniqueidentifier not null primary key); 
-merge [Thing] t 
-using #Appearance2 src on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #DereferencingSet2;
-
--- create 22 dereferencing sets
-insert into [DereferencingSet]([DereferencingSetUID]) 
-select [UID]
-from #DereferencingSet2;
-
--- add the appearances to the dereferencing sets
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from (select [UID], row_number() over (order by [UID]) as _row from #DereferencingSet2) s
-join (select [UID], row_number() over (order by [UID]) as _row from #Appearance2) app
-on s._row = app._row;
-
--- create 22 posit things
-drop table if exists #Posit5;
-create table #Posit5([UID] uniqueidentifier not null primary key);
-merge [Thing] t 
-using #DereferencingSet2 src on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #Posit5;
-
--- create 22 posits (with the limitation that the date needs to be converted to a string)
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], cast(getdate() as varchar(max)), getdate()
-from (select [UID], row_number() over (order by [UID]) as _row from #Posit5) p
-join (select [UID], row_number() over (order by [UID]) as _row from #DereferencingSet2) s
-on p._row = s._row;
-
--- we now have 26 posits, the last 22 of which intends to capture metadata
-select * from [v_Posit];
-
--- finally let the Script positor assert these
-drop table if exists #Assertion10;
-create table #Assertion10([UID] uniqueidentifier not null primary key);
-merge [Thing] t 
-using #Posit5 src on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #Assertion10;
-
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Script.[UID], p.[UID], 1, getdate()
-from (select [UID], row_number() over (order by [UID]) as _row from #Assertion10) a
-join (select [UID], row_number() over (order by [UID]) as _row from #Posit5) p
-on a._row = p._row
-cross apply #S Script;
-
--- there are now 31 assertions
-select * from [v_Assertion] 
-order by [DereferencingSetUID], [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
-
--- note that the metadata is not in effect if we travel back in time
-select * from [Information_in_Effect]('2018-12-01 14:00', '2018-12-13 15:50')
-order by [DereferencingSetUID], [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
-
--- finding all (current) metadata can be done by a condition on our Script positor
-select * from [Information_in_Effect](getdate(), getdate())
-where [PositorUID] = (select top 1 [UID] from #S)
-order by [DereferencingSetUID], [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
+-- let's find those posits again, with all metadata we have
+select * from [v_Posit]
+where PositXML.value('(//Appearance[@Role = "was recorded at"])[1]/@Thing', 'bigint') = 45;
 
 --------------------------------------- RELATIONSHIPS ---------------------------------------
--- we will start by marrying Archie and Bella
-
--- create a few new role things
-drop table if exists #Role3;
-create table #Role3([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Role3 values (DEFAULT);
-drop table if exists #Role4;
-create table #Role4([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Role4 values (DEFAULT);
-drop table if exists #Role5;
-create table #Role5([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Role5 values (DEFAULT);
-
--- create the new roles
-insert into [Role]([RoleUID], [Role]) 
-select [UID], 'husband' 
-from #Role3;
-insert into [Role]([RoleUID], [Role]) 
-select [UID], 'wife' 
-from #Role4;
-insert into [Role]([RoleUID], [Role]) 
-select [UID], 'church' 
-from #Role5;
+-- we will start by marrying Archie and Bella, and need three new roles
+exec AddRole 'wife';
+exec AddRole 'husband';
+exec AddRole 'church';
 
 -- what roles have got now?
-select * from [Role];
+select * from [Role] order by [Role_Identity] desc;
 
--- we will need a church thing
-drop table if exists #C;
-create table #C([UID] uniqueidentifier not null primary key); -- Church
+-- add the marriage as a ternary relationship
+exec AddPosit '70000 [{(42, husband), (43, wife), (555, church)}, "married", 2004-06-19 15:00]';
 
--- create the Church thing
-insert into [Thing]([UID]) output inserted.[UID] into #C values (DEFAULT);
+-- let's look at it
+select * from [v_Posit] where Posit_Identity = 70000;
 
--- we also need three appearance things
-drop table if exists #Appearance3;
-create table #Appearance3([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance3 values (DEFAULT);
-drop table if exists #Appearance4;
-create table #Appearance4([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance4 values (DEFAULT);
-drop table if exists #Appearance5;
-create table #Appearance5([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance5 values (DEFAULT);
+-- let Bella assert this
+exec AddPosit '70001 [{(70000, posit), (43, ascertains)}, "1.0", 2018-12-13 15:55]';
 
--- create three appearances
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], Archie.[UID], r.[RoleUID] 
-from [Role] r, #Appearance3 app, #A Archie 
-where r.[Role] = 'husband';
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], Bella.[UID], r.[RoleUID] 
-from [Role] r, #Appearance4 app, #B Bella 
-where r.[Role] = 'wife';
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], Church.[UID], r.[RoleUID] 
-from [Role] r, #Appearance5 app, #C Church
-where r.[Role] = 'church';
+-- let's look at it
+select * from [v_Assertion] where Posit_Identity = 70000;
 
--- create a dereferencing set thing
-drop table if exists #DereferencingSet3;
-create table #DereferencingSet3([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #DereferencingSet3 values (DEFAULT);
+-- let them divorce a while later (using the same appearance set)
+exec AddPosit '70002 [{(42, husband), (43, wife), (555, church)}, "divorced", 2010-01-31 10:00]';
 
--- create a dereferencing set
-insert into [DereferencingSet]([DereferencingSetUID]) 
-select [UID]
-from #DereferencingSet3;
+-- the state of this appearance set has transitioned from 'married' to 'divorced'
+select * from [v_Posit] where Posit_Identity in (70000, 70002);
 
--- add the created appearances to the (same) dereferencing set
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from #DereferencingSet3 s, #Appearance3 app;
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from #DereferencingSet3 s, #Appearance4 app;
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from #DereferencingSet3 s, #Appearance5 app;
+-- let Bella assert this as well
+exec AddPosit '70003 [{(70002, posit), (43, ascertains)}, "1.0", 2018-12-13 15:55]';
 
--- create a posit thing
-drop table if exists #Posit6;
-create table #Posit6([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Posit6 values (DEFAULT);
+-- let's look at it
+select * from [v_Assertion] where Posit_Identity in (70000, 70002);
 
--- create a posit
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], 'married', '2004-06-19 15:00'
-from #Posit6 p, #DereferencingSet3 s;
+-- however, as it turns out, Bella remarried at a later time, but not in a church
+-- and this time with the Disagreer as her husband
+exec AddPosit '70004 [{(46, husband), (43, wife)}, "married", 2011-11-11 11:11]';
 
--- now the posit is complete (note that the set has three members now)
-select * from [v_Posit] 
-where [DereferencingSetUID] = (select top 1 [UID] from #DereferencingSet3);
-
--- let Bella assert this, so first create an assertion thing
-drop table if exists #Assertion11;
-create table #Assertion11([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Assertion11 values (DEFAULT);
-
--- create an assertion
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Bella.[UID], p.[UID], 1, '2018-12-13 15:55'
-from #Assertion11 a, #B Bella, #Posit6 p;
-
--- now Bella has asserted the marriage
-select * from [v_Assertion] 
-where [DereferencingSetUID] = (select top 1 [UID] from #DereferencingSet3)
-order by [DereferencingSetUID], [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
-
--- let them divorce a while later (using the same dereferencing set)
--- create a posit thing
-drop table if exists #Posit7;
-create table #Posit7([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Posit7 values (DEFAULT);
-
--- create a posit
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], 'divorced', '2010-01-31 10:00'
-from #Posit7 p, #DereferencingSet3 s;
-
--- the state of this dereferencing set has transitioned from 'married' to 'divorced'
-select * from [v_Posit] 
-where [DereferencingSetUID] = (select top 1 [UID] from #DereferencingSet3);
-
--- let Bella assert this as well, so first create an assertion thing
-drop table if exists #Assertion12;
-create table #Assertion12([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Assertion12 values (DEFAULT);
-
--- create an assertion
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Bella.[UID], p.[UID], 1, '2018-12-13 15:55'
-from #Assertion12 a, #B Bella, #Posit7 p;
-
--- now Bella has asserted the divorce
-select * from [v_Assertion] 
-where [DereferencingSetUID] = (select top 1 [UID] from #DereferencingSet3)
-order by [DereferencingSetUID], [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
-
--- however, as it turns out, Bella remarried the Disagreer at a later time, but not in a church
--- that means a new dereferencing set is needed and this time without the church
-
--- first the Disagreer must appear as husband
-drop table if exists #Appearance6;
-create table #Appearance6([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance6 values (DEFAULT);
-
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], Disagreer.[UID], r.[RoleUID] 
-from [Role] r, #Appearance6 app, #D Disagreer 
-where r.[Role] = 'husband';
-
--- create a dereferencing set thing
-drop table if exists #DereferencingSet4;
-create table #DereferencingSet4([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #DereferencingSet4 values (DEFAULT);
-
--- create a dereferencing set
-insert into [DereferencingSet]([DereferencingSetUID]) 
-select [UID]
-from #DereferencingSet4;
-
--- add the created appearances to the dereferencing set (with only two members)
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from #DereferencingSet4 s, #Appearance6 app;
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from #DereferencingSet4 s, #Appearance4 app;
-
--- create a posit thing
-drop table if exists #Posit8;
-create table #Posit8([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Posit8 values (DEFAULT);
-
--- create a posit
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], 'married', '2011-11-11 11:11'
-from #Posit8 p, #DereferencingSet4 s;
-
--- let Bella assert this as well, so first create an assertion thing
-drop table if exists #Assertion13;
-create table #Assertion13([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Assertion13 values (DEFAULT);
-
--- create an assertion
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Bella.[UID], p.[UID], 1, '2018-12-13 15:55'
-from #Assertion13 a, #B Bella, #Posit8 p;
+-- let Bella assert this as well
+exec AddPosit '70005 [{(70004, posit), (43, ascertains)}, "1.0", 2018-12-13 15:55]';
 
 -- now Bella has asserted her second marriage
 -- we can find this from finding every assertion in which Bella has appeared in the wife role
 -- regardless if the relationship involves a church or not
--- note: it is also possible to achieve the same result using joins instead of the XML query
-select a.* from [v_Assertion] a cross apply #B Bella
-where AssertionXML.exist('/Assertion/Posit/DereferencingSet/Appearance[@UID = sql:column("Bella.UID") and @Role = "wife"]') = 1
-order by [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
+select * from [v_Assertion] 
+where AssertionXML.value('(//Appearance[@Role = "wife"])[1]/@Thing', 'bigint') = 43
+order by [AppearanceTime] desc, [AssertionTime] desc;
 
 -- but, Bella made a mistake, the appearance time of her second marriage is not correct
 -- so she first makes a retraction of the erroneous assertion
-drop table if exists #Assertion14;
-create table #Assertion14([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Assertion14 values (DEFAULT);
-
--- create an assertion (that is a retraction since Reliability = 0)
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Bella.[UID], p.[UID], 0, '2018-12-13 16:00'
-from #Assertion14 a, #B Bella, #Posit8 p;
+exec AddPosit '70006 [{(70004, posit), (43, ascertains)}, "0.0", 2018-12-13 16:00]';
 
 -- in the view of all assertions the retraction is now visible
-select a.* from [v_Assertion] a cross apply #B Bella
-where AssertionXML.exist('/Assertion/Posit/DereferencingSet/Appearance[@UID = sql:column("Bella.UID") and @Role = "wife"]') = 1
-order by [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
+select * from [v_Assertion] 
+where AssertionXML.value('(//Appearance[@Role = "wife"])[1]/@Thing', 'bigint') = 43
+order by [AppearanceTime] desc, [AssertionTime] desc;
 
 -- which means that the latest information we have is that Bella is divorced
-select a.* from [Information_in_Effect](getdate(), getdate()) a cross apply #B Bella
-where AssertionXML.exist('/Assertion/Posit/DereferencingSet/Appearance[@UID = sql:column("Bella.UID") and @Role = "wife"]') = 1
-order by [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
+select * from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.value('(//Appearance[@Role = "wife"])[1]/@Thing', 'bigint') = 43
+order by [AppearanceTime] desc, [AssertionTime] desc;
 
 -- so Bella needs to assert a different posit, with the correct appearance time
-drop table if exists #Posit9;
-create table #Posit9([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Posit9 values (DEFAULT);
-
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], 'married', '2012-12-12 12:12'
-from #Posit9 p, #DereferencingSet4 s;
-
-drop table if exists #Assertion15;
-create table #Assertion15([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Assertion15 values (DEFAULT);
-
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Bella.[UID], p.[UID], 1, '2018-12-13 16:00'
-from #Assertion15 a, #B Bella, #Posit9 p;
+exec AddPosit '70007 [{(46, husband), (43, wife)}, "married", 2012-12-12 12:12]';
+exec AddPosit '70008 [{(70007, posit), (43, ascertains)}, "1.0", 2018-12-13 16:00]';
 
 -- in the view of all assertions the correction is now visible
-select a.* from [v_Assertion] a cross apply #B Bella
-where AssertionXML.exist('/Assertion/Posit/DereferencingSet/Appearance[@UID = sql:column("Bella.UID") and @Role = "wife"]') = 1
-order by [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
+select * from [v_Assertion] 
+where AssertionXML.value('(//Appearance[@Role = "wife"])[1]/@Thing', 'bigint') = 43
+order by [AppearanceTime] desc, [AssertionTime] desc;
 
--- new the latest information we have is that Bella is married, but note that the earlier divorce is also shown
--- due to it having a different dereferencing set
-select a.* from [Information_in_Effect](getdate(), getdate()) a cross apply #B Bella
-where AssertionXML.exist('/Assertion/Posit/DereferencingSet/Appearance[@UID = sql:column("Bella.UID") and @Role = "wife"]') = 1
-order by [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
+-- new the latest information we have is that Bella is married, 
+-- but note that the earlier divorce is also shown due to it having a different dereferencing set
+select * from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.value('(//Appearance[@Role = "wife"])[1]/@Thing', 'bigint') = 43
+order by [AppearanceTime] desc, [AssertionTime] desc;
 
+-- if we know that the binary and ternary relationships are equivalent with respect to our 
+-- search conditions, we can pick only the latest one (this depends on business logic)
+select top 1 * from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.value('(//Appearance[@Role = "wife"])[1]/@Thing', 'bigint') = 43
+order by [AppearanceTime] desc, [AssertionTime] desc;
 
 ------------------------------------------- MODELING ------------------------------------------
 /*
@@ -1250,257 +992,51 @@ pM = [{(i, thing),(C, class)}, v, t].
 
 It is time for the Modeler to step in and tell us what some of our things are.
 */
--- we need three new roles in order to create a model
-drop table if exists #Role6;
-create table #Role6([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Role6 values (DEFAULT);
-drop table if exists #Role7;
-create table #Role7([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Role7 values (DEFAULT);
-drop table if exists #Role8;
-create table #Role8([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Role8 values (DEFAULT);
 
--- create the new roles
-insert into [Role]([RoleUID], [Role]) 
-select [UID], 'is class' 
-from #Role6;
-insert into [Role]([RoleUID], [Role]) 
-select [UID], 'thing' 
-from #Role7;
-insert into [Role]([RoleUID], [Role]) 
-select [UID], 'class' 
-from #Role8;
+-- we need new roles in order to create a model
+exec AddRole 'thing';
+exec AddRole 'class';
 
 -- what roles have got now?
-select * from [Role] order by RoleUID;
+select * from [Role] order by Role_Identity desc;
 
--- create two class things
-drop table if exists #Class1;
-create table #Class1([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Class1 values (DEFAULT);
-drop table if exists #Class2;
-create table #Class2([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Class2 values (DEFAULT);
-
--- the classes need names, so first they need to appear with the "is class" role
-drop table if exists #Appearance7;
-create table #Appearance7([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance7 values (DEFAULT);
-drop table if exists #Appearance8;
-create table #Appearance8([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance8 values (DEFAULT);
-
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], c.[UID], r.[RoleUID] 
-from [Role] r, #Appearance7 app, #Class1 c 
-where r.[Role] = 'is class';
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], c.[UID], r.[RoleUID] 
-from [Role] r, #Appearance8 app, #Class2 c 
-where r.[Role] = 'is class';
-
--- create a dereferencing set thing
-drop table if exists #DereferencingSet5;
-create table #DereferencingSet5([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #DereferencingSet5 values (DEFAULT);
-drop table if exists #DereferencingSet6;
-create table #DereferencingSet6([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #DereferencingSet6 values (DEFAULT);
-
--- create dereferencing sets
-insert into [DereferencingSet]([DereferencingSetUID]) 
-select [UID]
-from #DereferencingSet5;
-insert into [DereferencingSet]([DereferencingSetUID]) 
-select [UID]
-from #DereferencingSet6;
-
--- add the created appearances
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from #DereferencingSet5 s, #Appearance7 app;
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from #DereferencingSet6 s, #Appearance8 app;
-
--- two posit things
-drop table if exists #Posit10;
-create table #Posit10([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Posit10 values (DEFAULT);
-drop table if exists #Posit11;
-create table #Posit11([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Posit11 values (DEFAULT);
-
--- two posits
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], 'Person', '1901-01-01' -- will represent dawn of time
-from #Posit10 p, #DereferencingSet5 s;
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], 'Cathedral', '1901-01-01' -- will represent dawn of time
-from #Posit11 p, #DereferencingSet6 s;
-
--- now, the Modeler must assert these
-drop table if exists #Assertion16;
-create table #Assertion16([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Assertion16 values (DEFAULT);
-drop table if exists #Assertion17;
-create table #Assertion17([UID] uniqueidentifier not null primary key);
-insert into [Thing]([UID]) output inserted.[UID] into #Assertion17 values (DEFAULT);
-
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Modeler.[UID], p.[UID], 1, '2018-12-01 00:00'
-from #Assertion16 a, #M Modeler, #Posit10 p;
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Modeler.[UID], p.[UID], 1, '2018-12-01 00:00'
-from #Assertion17 a, #M Modeler, #Posit11 p;
+-- start building the model by defining our classes
+exec AddPosit '80000 [{(1000, class)}, "Person", 1901-01-01]';
+exec AddPosit '80001 [{(1001, class)}, "Cathedral", 1901-01-01]';
 
 -- list all classes
-select a.* from [v_Assertion] a 
-where AssertionXML.exist('/Assertion/Posit/DereferencingSet/Appearance[@Role = "is class"]') = 1
-order by [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
+select * from [v_Posit] 
+where PositXML.value('count((//Appearance[@Role = "class"])/../Appearance)', 'int') = 1
+order by [AppearanceTime] desc;
 
--- lot's of work, but two classes are defined
--- they have their own unique identifiers, so many more roles can be added to provide additional
--- information about the classes
+-- let Bella, Archie, and the church get classifications
+exec AddPosit '80002 [{(42, thing), (1000, class)}, "active", 2021-07-05]';
+exec AddPosit '80003 [{(43, thing), (1000, class)}, "active", 2021-07-05]';
+exec AddPosit '80004 [{(555, thing), (1001, class)}, "active", 2021-07-05]';
 
--- now it is time to associate some things with the classes
--- every such thing needs an appearance with the 'thing' role
-drop table if exists #Appearance9;
-create table #Appearance9([UID] uniqueidentifier not null primary key); 
-merge [Thing] t 
-using (
-	select [UID] from #A
-	union all
-	select [UID] from #B
-	union all
-	select [UID] from #C
-	union all
-	select [UID] from #M
-	union all
-	select [UID] from #D
-) src 
-on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #Appearance9;
+-- let the Modeler assert these
+exec AddPosit '80005 [{(80002, posit), (44, ascertains)}, "1.0", 2021-07-05]';
+exec AddPosit '80006 [{(80003, posit), (44, ascertains)}, "1.0", 2021-07-05]';
+exec AddPosit '80007 [{(80004, posit), (44, ascertains)}, "1.0", 2021-07-05]';
 
--- create an equal number of appearances 
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], t.[UID], r.[RoleUID] 
-from (select [UID], row_number() over (order by [UID]) as _row from #Appearance9) app
-join (select [UID], row_number() over (order by [UID]) as _row from (
-	select [UID] from #A
-	union all
-	select [UID] from #B
-	union all
-	select [UID] from #C
-	union all
-	select [UID] from #M
-	union all
-	select [UID] from #D
-) things ) t 
-on t._row = app._row
-cross apply (select [RoleUID] from [Role] where [Role] = 'thing') r;
+-- list all classifications
+select * from [v_Posit] 
+where PositXML.value('count((//Appearance[@Role = "class"])/../Appearance)', 'int') = 2
+order by [AppearanceTime] desc;
 
--- then two more appearances (one for each associated class)
-drop table if exists #Appearance10;
-create table #Appearance10([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance10 values (DEFAULT);
-drop table if exists #Appearance11;
-create table #Appearance11([UID] uniqueidentifier not null primary key); 
-insert into [Thing]([UID]) output inserted.[UID] into #Appearance11 values (DEFAULT);
 
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], c.[UID], r.[RoleUID] 
-from [Role] r, #Appearance10 app, #Class1 c 
-where r.[Role] = 'class';
-insert into [Appearance]([AppearanceUID], [ThingUID], [RoleUID])
-select app.[UID], c.[UID], r.[RoleUID] 
-from [Role] r, #Appearance11 app, #Class2 c 
-where r.[Role] = 'class';
+------------------------------------------------------------------------------------------------
 
--- create dereferencing set things (equal in number to the things we want to classify)
-drop table if exists #DereferencingSet7;
-create table #DereferencingSet7([UID] uniqueidentifier not null primary key); 
-merge [Thing] t 
-using #Appearance9 src on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #DereferencingSet7;
+select * from [Thing];
+select * from [Role];
+select * from [Appearance];
+select * from [AppearanceSet];
+select * from [Appearance_in_AppearanceSet];
+select * from [Posit];
+select * from [v_Posit];
+select * from [v_Assertion];
 
--- create 22 dereferencing sets
-insert into [DereferencingSet]([DereferencingSetUID]) 
-select [UID]
-from #DereferencingSet7;
-
--- add the appearances to the dereferencing sets
--- first the things
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select s.[UID], app.[UID]
-from (select [UID], row_number() over (order by [UID]) as _row from #DereferencingSet7) s
-join (select [UID], row_number() over (order by [UID]) as _row from #Appearance9) app
-on s._row = app._row;
--- then the classes
-insert into [Dereference]([DereferencingSetUID], [AppearanceUID])
-select 
-	s.[UID], 
-		case 
-			when exists (
-					select top 1 d.[DereferencingSetUID]
-					from [Dereference] d 
-					join [Appearance] a
-					  on a.[AppearanceUID] = d.[AppearanceUID]
-					join (
-						select [UID] from #A
-						union all
-						select [UID] from #B
-						union all
-						select [UID] from #M
-						union all
-						select [UID] from #D
-					) persons
-					on persons.[UID] = a.[ThingUID]
-					where d.[DereferencingSetUID] = s.[UID]
-			) then Person.[UID]
-			else Cathedral.[UID]
-		end
-from #DereferencingSet7 s, #Appearance10 Person, #Appearance11 Cathedral;
-
--- create posit things
-drop table if exists #Posit12;
-create table #Posit12([UID] uniqueidentifier not null primary key);
-merge [Thing] t 
-using #DereferencingSet7 src on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #Posit12;
-
--- create posits 
-insert into [Posit]([PositUID], [DereferencingSetUID], [Value], [AppearanceTime])
-select p.[UID], s.[UID], 'active', '1901-01-01'
-from (select [UID], row_number() over (order by [UID]) as _row from #Posit12) p
-join (select [UID], row_number() over (order by [UID]) as _row from #DereferencingSet7) s
-on p._row = s._row;
-
--- finally let the Modeler positor assert these
-drop table if exists #Assertion18;
-create table #Assertion18([UID] uniqueidentifier not null primary key);
-merge [Thing] t 
-using #Posit12 src on 1 = 0 -- make sure everything is "not matched" below
-when not matched then insert ([UID]) values (DEFAULT)
-output inserted.[UID] into #Assertion18;
-
-insert into [Assertion]([AssertionUID], [PositorUID], [PositUID], [Reliability], [AssertionTime])
-select a.[UID], Modeler.[UID], p.[UID], 1, '2018-12-01 00:00'
-from (select [UID], row_number() over (order by [UID]) as _row from #Assertion18) a
-join (select [UID], row_number() over (order by [UID]) as _row from #Posit12) p
-on a._row = p._row
-cross apply #M Modeler;
-
--- list all classes and classifiers
--- as can be seen there are four things of class Person and one thing of class Cathedral
-select a.* from [v_Assertion] a 
-where AssertionXML.exist('/Assertion/Posit/DereferencingSet/Appearance[@Role = "is class" or @Role = "class"]') = 1
-order by [PositorUID], [AppearanceTime] desc, [AssertionTime] desc;
-
+----------------------------------------- TODO BELOW ------------------------------------------
 
 /*
 ----------- Excerpt from: Modeling Conflicting, Unreliable, and Varying Information -----------
