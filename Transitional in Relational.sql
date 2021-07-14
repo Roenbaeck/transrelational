@@ -1063,6 +1063,12 @@ exec AddPosit '80013 [{(42, thing), (1003, class)}, "active", 2021-07-05]';
 exec AddPosit '80014 [{(80012, posit), (44, ascertains)}, "1.0", 2021-07-05]';
 exec AddPosit '80015 [{(80013, posit), (44, ascertains)}, "1.0", 2021-07-05]';
 
+-- let the Disagreer reject the fact that Archie is a "Golfer"
+exec AddPosit '80016 [{(80012, posit), (46, ascertains)}, "-1.0", 2021-07-05]';
+-- and also that Arhie is no longer a "Customer", but was up until August
+exec AddPosit '80017 [{(42, thing), (1003, class)}, "inactive", 2021-08-01]';
+exec AddPosit '80018 [{(80017, posit), (46, ascertains)}, "1.0", 2021-07-05]';
+
 
 ------------------------------------ A NEW TYPE OF QUERYING ------------------------------------
 -- Give us everything we (currently) know about Archie (42) - similar to Name-Value-Pair search
@@ -1100,5 +1106,22 @@ where AssertionXML.value('(//Appearance[@Role = "class"])[1]/@Thing', 'bigint') 
 -- Show me all information for which there currently is some doubt - similar to a Probabalistic database
 select * from [Information_in_Effect](getdate(), getdate()) 
 where abs(Certainty) < 1;
+
+-- Show me all information for which there is not perfect agreement - entirely new type of query
+-- (same posit, different certainties)
+select * from [Information_in_Effect](getdate(), getdate()) 
+where Posit_Identity in (
+	select Posit_Identity from [Information_in_Effect](getdate(), getdate()) 
+	group by Posit_Identity having count(distinct Certainty) > 1
+);
+
+-- Show me all information for which different values appear for different positors - entirely new type of query
+-- (same appearance set, different values)
+select * from [Information_in_Effect](getdate(), getdate()) 
+where AppearanceSet_Identity in (
+	select AppearanceSet_Identity from [Information_in_Effect](getdate(), getdate()) 
+	group by AppearanceSet_Identity having count(distinct AppearingValue_Hash) > 1
+);
+
 
 
