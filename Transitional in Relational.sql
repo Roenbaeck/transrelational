@@ -18,6 +18,7 @@
 --   Version: 20210703.1   Assertions are now meta-posits, reflecting our latest research.
 --                         Updated other terminology to also reflect later research.
 --                         Appearing values are now XML, to indicate that they can have structure.
+--   Version: 20210714.1   Added some more examples.
 --
 --
 drop view if exists [Check_for_Contradictions];
