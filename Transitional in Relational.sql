@@ -578,7 +578,7 @@ exec AddPosit '60004 [{(46, name)}, "Disagreer", 1955-05-15]';
 
 -- now let's add some information about Archie's beard
 exec AddPosit '60005 [{(42, has beard)}, "fluffy red", 2018-12-01 12:00]';
--- let Bella assert this
+-- let Bella assert this 
 exec AddPosit '60006 [{(60005, posit), (43, ascertains)}, "1.0", 2018-12-13 15:30]';
 
 -- there are posits for the names, the beard, and the assertion meta-posit
@@ -896,6 +896,24 @@ exec (@AddPositsSQL);
 select * from [v_Posit]
 where PositXML.value('(//Appearance[@Role = "was recorded at"])[1]/@Thing', 'bigint') = 45;
 
+
+------------------------------------- UNASSERTED POSITS -------------------------------------
+-- remember the names we gave the individuals? 
+select * from [Information_in_Effect](getdate(), getdate());
+-- they are not showing up since they are not asserted
+select * from [v_Posit]
+where PositXML.exist('//Appearance[@Role = "name"]') = 1;
+-- so let Bella assert these
+exec AddPosit '60042 [{(60000, posit), (43, ascertains)}, "1.0", 2018-12-13 15:30]';
+exec AddPosit '60043 [{(60001, posit), (43, ascertains)}, "1.0", 2018-12-13 15:30]';
+exec AddPosit '60044 [{(60002, posit), (43, ascertains)}, "1.0", 2018-12-13 15:30]';
+exec AddPosit '60045 [{(60003, posit), (43, ascertains)}, "1.0", 2018-12-13 15:30]';
+exec AddPosit '60046 [{(60004, posit), (43, ascertains)}, "1.0", 2018-12-13 15:30]';
+
+-- now we see the names as well
+select * from [Information_in_Effect](getdate(), getdate());
+
+
 --------------------------------------- RELATIONSHIPS ---------------------------------------
 -- we will start by marrying Archie and Bella, and need three new roles
 exec AddRole 'wife';
@@ -1024,34 +1042,62 @@ select * from [v_Posit]
 where PositXML.value('count((//Appearance[@Role = "class"])/../Appearance)', 'int') = 2
 order by [AppearanceTime] desc;
 
+-- let's create a classification hierarchy
+exec AddRole 'subclass';
+exec AddPosit '80008 [{(1002, class)}, "Golfer", 1901-01-01]';
+exec AddPosit '80009 [{(1002, subclass), (1000, class)}, "active", 1901-01-01]';
+exec AddPosit '80010 [{(1003, class)}, "Customer", 1901-01-01]';
+exec AddPosit '80011 [{(1003, subclass), (1000, class)}, "active", 1901-01-01]';
 
-------------------------------------------------------------------------------------------------
+-- list all sublclasses
+select * from [v_Posit] 
+where PositXML.exist('//Appearance[@Role = "subclass"]') = 1
+order by [AppearanceTime] desc;
 
-select * from [Thing];
-select * from [Role];
-select * from [Appearance];
-select * from [AppearanceSet];
-select * from [Appearance_in_AppearanceSet];
-select * from [Posit];
-select * from [v_Posit];
-select * from [v_Assertion];
+-- let Archie be a "Golfer" and a "Customer" as well
+exec AddPosit '80012 [{(42, thing), (1002, class)}, "active", 2021-07-05]';
+exec AddPosit '80013 [{(42, thing), (1003, class)}, "active", 2021-07-05]';
 
------------------------------------------ TODO BELOW ------------------------------------------
+-- let the Modeler assert these
+exec AddPosit '80014 [{(80012, posit), (44, ascertains)}, "1.0", 2021-07-05]';
+exec AddPosit '80015 [{(80013, posit), (44, ascertains)}, "1.0", 2021-07-05]';
 
-/*
------------ Excerpt from: Modeling Conflicting, Unreliable, and Varying Information -----------
-def. of a posit type
-A posit type, τ(p) = [{(C1,r1), . . . ,(Cn,rn)}, τ(v), τ(t)], for a
-posit p = [{(i1,r1), . . . ,(in,rn)}, v, t], is a structure constructed
-by replacing unique identifiers, ij with the unique identifiers of their 
-class, Cj, the value, v, with its data type, τ(v), and the time point, t, 
-with its data type, τ(t).
------------------------------------------------------------------------------------------------
 
-A posit type is a structure, but posits in the relational model can only have 
-values of type varchar(max), so it cannot hold such a structure. It could either
-be expressed as serialized XML or JSON, or we could let the field contain a 
-reference to an identifier in a separate table that replicates the structure.
-Since a posit type contains a set with variable number of members, it is 
-easier in this case to express it using XML.
-*/
+------------------------------------ A NEW TYPE OF QUERYING ------------------------------------
+-- Give us everything we (currently) know about Archie (42) - similar to Name-Value-Pair search
+select * from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.exist('//Appearance[@Thing = 42]') = 1
+order by [AppearanceTime] desc, [AssertionTime] desc;
+
+-- Find all assertions in which a "wife" has appeared - similar to Graph Database search
+select * from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.exist('//Appearance[@Role = "wife"]') = 1
+order by [AppearanceTime] desc, [AssertionTime] desc;
+
+-- let us name the church as well, coincidentally also named "Bella"
+exec AddPosit '90000 [{(555, name)}, "Bella", 1921-10-11]';
+-- let Archie assert this
+exec AddPosit '90001 [{(90000, posit), (42, ascertains)}, "0.5", 2018-12-13 16:00]';
+
+-- Find all things named "Bella" regardless of what it may be - a Graph/Relational mix
+select * from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.exist('//Appearance[@Role = "name"]') = 1
+and AppearingValue.value('.', 'varchar(max)') = 'Bella'
+order by [AppearanceTime] desc, [AssertionTime] desc;
+
+-- Find all "Customers" - similar to Relational
+select * from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.value('(//Appearance[@Role = "class"])[1]/@Thing', 'bigint') = 1003;
+
+-- Find all "Customers" or "Golfers" - Relational with a twist
+select 
+	AssertionXML.value('(//Appearance[@Role = "thing"])[1]/@Thing', 'bigint') as [thing], 
+	AssertionXML.value('(//Appearance[@Role = "class"])[1]/@Thing', 'bigint') as [class]
+from [Information_in_Effect](getdate(), getdate()) 
+where AssertionXML.value('(//Appearance[@Role = "class"])[1]/@Thing', 'bigint') in (1002, 1003);
+
+-- Show me all information for which there currently is some doubt - similar to a Probabalistic database
+select * from [Information_in_Effect](getdate(), getdate()) 
+where abs(Certainty) < 1;
+
+
